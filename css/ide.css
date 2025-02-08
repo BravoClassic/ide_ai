@@ -6,6 +6,8 @@ html, body {
     background: url("../images/logo_black.svg") center center / 33% no-repeat #1b1c1d; /* Color from Semantic UI */
 }
 
+
+
 .judge0-file-menu {
     min-width: 15rem !important;
 }
@@ -24,4 +26,61 @@ html, body {
 
 .judge0-hidden {
     display: none !important;
+}
+
+/* Chat Messages Container */
+#ai-chat-messages {
+    flex-grow: 1;
+    overflow-y: auto; /* Enables scrolling for long messages */
+    padding: 10px;
+    background-color: #333;
+    color: white;
+    max-height: calc(85vh - 80px); /* Adjust this if needed */
+    /* white-space: pre-wrap; Prevents text from getting cut off */
+    /* word-wrap: break-word; Ensures long words wrap properly */
+    line-height: 1.5; /* Improves readability */
+    font-size: 14px;
+}
+
+textarea:focus{
+    outline: none;
+    border: none;
+}
+
+
+/* Common Chat Message Styles */
+.chat-message {
+    display: flex;
+    align-items: center;
+}
+
+/* Chat Bubble */
+.chat-bubble {
+    padding: 10px 15px;
+    border-radius: 15px;
+    max-width: 75%;
+    word-wrap: break-word;
+    font-size: 14px;
+}
+
+/* User Message Bubble (Right Side) */
+.user-message {
+    justify-content: flex-end;
+}
+
+.user-message .chat-bubble {
+    background-color: #007bff;
+    color: white;
+    border-bottom-right-radius: 2px;
+}
+
+/* AI Message Bubble (Left Side) */
+.ai-message {
+    justify-content: flex-start;
+}
+
+.ai-message .chat-bubble {
+    background-color: #f1f1f1;
+    color: black;
+    border-bottom-left-radius: 2px;
 }
