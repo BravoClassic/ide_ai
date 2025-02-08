@@ -136,7 +136,7 @@ function showError(title, content) {
 
 async function renderMarkdown(text) {
   const url = "https://api.github.com/markdown/raw";
-  const token = "{{GITHUB_TOKEN}}"; // Replace with your GitHub token
+  const token = ""; // Replace with your GitHub token
 
   const markdownText = text;
 
