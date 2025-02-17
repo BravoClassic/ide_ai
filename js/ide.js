@@ -156,7 +156,6 @@ async function renderMarkdown(text) {
   }
 
   const html = await response.text();
-  console.log(html); // Rendered HTML from Markdown
   return html;
 }
 
@@ -383,12 +382,16 @@ function saveFile(content, filename) {
   URL.revokeObjectURL(link.href);
 }
 
-const GROQ_API_KEY = "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";
+const GROQ_API_KEY = "";
 const AI_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 async function chatWithAI(message) {
   const code = sourceEditor.getValue(); // Fetch the user's current code
-  const prompt = `User's code:\n${code}\n\nUser's question: ${message}`;
+  const error = stdoutEditor.getValue();
+  const prompt = `
+  User's code:\n${code}\n\nUser's question: ${message}
+  Here is the output of the code: ${error}. If the user needs help with an error help them.
+  `;
 
   const response = await fetch(AI_API_URL, {
     method: "POST",
@@ -402,7 +405,6 @@ async function chatWithAI(message) {
       temperature: 0.7,
     }),
   });
-
   const data = await response.json();
   return data.choices[0].message.content.trim();
 }
@@ -573,6 +575,61 @@ function refreshLayoutSize() {
   layout.updateSize();
 }
 
+async function getAISuggestions(currentLine, code, language, lineNumber) {
+  try {
+    const response = await fetch(AI_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "system",
+            content: `Provide full-line AI code suggestions for ${language}. Ensure indentation is correct.`,
+          },
+          {
+            role: "user",
+            content: `Given the code context:\n${code}\n\nAnd the current partially written line:\n"${currentLine}"\n\nSuggest a **full replacement** that matches the indentation.`,
+          },
+        ],
+        temperature: 0.7,
+      }),
+    });
+
+    console.log(language);
+
+    const data = await response.json();
+    if (!data.choices || data.choices.length === 0) return [];
+
+    // Format AI suggestions for Monaco
+    return data.choices[0].message.content.split("\n").map((suggestion) => ({
+      label: suggestion.trim(),
+      kind: monaco.languages.CompletionItemKind.Text,
+      insertText: suggestion.trim(),
+      documentation: "AI Suggested Full-Line Replacement",
+      range: new monaco.Range(
+        lineNumber,
+        1,
+        lineNumber,
+        currentLine.length + 1
+      ),
+    }));
+  } catch (error) {
+    console.error("Error fetching AI suggestions:", error);
+    return [];
+  }
+}
+
+function applyIndentation(currentLine, suggestion) {
+  const indentationMatch = currentLine.match(/^(\s*)/); // Detect leading spaces/tabs
+  const indentation = indentationMatch ? indentationMatch[1] : "";
+
+  return indentation + suggestion.trim(); // Preserve indentation
+}
+
 $(window).resize(refreshLayoutSize);
 
 $(document).ready(async function () {
@@ -588,10 +645,12 @@ $(document).ready(async function () {
   );
 
   $selectLanguage = $("#select-language");
-  $selectLanguage.change(function (event, data) {
+  $selectLanguage.change(async function (event, data) {
     let skipSetDefaultSourceCodeName =
       (data && data.skipSetDefaultSourceCodeName) || !!gPuterFile;
     loadSelectedLanguage(skipSetDefaultSourceCodeName);
+    sessionStorage.setItem("languageid", $selectLanguage.val());
+    await setupCompletionProvider();
   });
 
   await loadLangauges();
@@ -654,6 +713,68 @@ $(document).ready(async function () {
       }
     }
   });
+  async function getLanguageForAI(id) {
+    if (!id) return "plaintext"; // Default if missing
+
+    try {
+      const response = await fetch(`https://ce.judge0.com/languages/${id}`);
+      const data = await response.json();
+      return getEditorLanguageMode(data.name); // Convert to Monaco's language mode
+    } catch (error) {
+      console.error("Error fetching language:", error);
+      return "plaintext";
+    }
+  }
+
+  async function setupCompletionProvider() {
+    let languageId =
+      sessionStorage.getItem("languageid") || DEFAULT_LANGUAGE_ID;
+
+    // Get Monaco-compatible language
+    const language = await getLanguageForAI(languageId);
+    console.log("Setting up AI autocompletion for:", language);
+
+    // Register completion provider
+
+    monaco.languages.registerCompletionItemProvider(language, {
+      triggerCharacters: [" ", ":", "."], // AI triggers on spaces, colons (Python), and dots (methods)
+
+      provideCompletionItems: async function (model, position) {
+        let code = model.getValue(); // Full code in editor
+        let currentLine = model.getLineContent(position.lineNumber); // Current line being edited
+        let lineNumber = position.lineNumber;
+
+        let aiSuggestions = await getAISuggestions(
+          currentLine,
+          code,
+          language,
+          lineNumber
+        );
+
+        return {
+          suggestions: aiSuggestions.map((suggestion) => ({
+            label: suggestion.label,
+            kind: monaco.languages.CompletionItemKind.Text,
+            insertText: applyIndentation(currentLine, suggestion.insertText),
+            documentation: suggestion.documentation,
+
+            // Replace entire line while preserving indentation
+            range: new monaco.Range(
+              lineNumber,
+              1,
+              lineNumber,
+              currentLine.length + 1
+            ),
+          })),
+        };
+      },
+    });
+
+    console.log(
+      "AI Full-Line Autocomplete with Indentation enabled for:",
+      language
+    );
+  }
 
   require(["vs/editor/editor.main"], function (ignorable) {
     layout = new GoldenLayout(layoutConfig, $("#judge0-site-content"));
@@ -675,6 +796,7 @@ $(document).ready(async function () {
         run
       );
     });
+    // setupCompletionProvider();
 
     layout.registerComponent("stdin", function (container, state) {
       stdinEditor = monaco.editor.create(container.getElement()[0], {
@@ -724,7 +846,6 @@ $(document).ready(async function () {
         </div>
     `;
       container.getElement()[0].appendChild(chatContainer);
-
     });
 
     layout.on("initialised", function () {
@@ -757,6 +878,140 @@ $(document).ready(async function () {
         )}</div>`;
         chatMessages.scrollTop = 0;
       });
+    // 1. Add an action to Monaco to trigger the inline chat
+    sourceEditor.addAction({
+      id: "inline-ai-chat",
+      label: "Chat about Selected Code",
+      keybindings: [
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyMod.KEY_C,
+      ],
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.5,
+      run: function (ed) {
+        // Get the selected code from the editor
+        const selection = ed.getSelection();
+        const selectedCode = ed.getModel().getValueInRange(selection);
+        if (!selectedCode) {
+          alert("Please select some code to chat about!");
+          return;
+        }
+
+        // Create the main chat container with modern styling
+        const chatContainer = document.createElement("div");
+        chatContainer.style.position = "absolute";
+        chatContainer.style.top = "50px"; // Adjust as needed
+        chatContainer.style.right = "20px"; // Adjust as needed
+        chatContainer.style.width = "320px";
+        chatContainer.style.backgroundColor = "#ffffff";
+        chatContainer.style.padding = "15px";
+        chatContainer.style.boxShadow = "0 4px 12px rgba(0, 0, 0, 0.15)";
+        chatContainer.style.borderRadius = "8px";
+        chatContainer.style.fontFamily = "Arial, sans-serif";
+        chatContainer.style.zIndex = 1000; // Ensure it appears above other elements
+
+        // Create a header with a title and a close button
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "center";
+        header.style.marginBottom = "10px";
+
+        // Title
+        const title = document.createElement("span");
+        title.innerText = "AI Chat";
+        title.style.fontSize = "16px";
+        title.style.fontWeight = "600";
+        title.style.color = "#333";
+
+        // Close button
+        const closeBtn = document.createElement("button");
+        closeBtn.innerHTML = "&times;";
+        closeBtn.style.background = "none";
+        closeBtn.style.border = "none";
+        closeBtn.style.fontSize = "20px";
+        closeBtn.style.cursor = "pointer";
+        closeBtn.style.color = "#888";
+        closeBtn.addEventListener("click", () => {
+          document.body.removeChild(chatContainer);
+        });
+
+        // Append title and close button to the header
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+
+        // Create the textarea for user input
+        const textArea = document.createElement("textarea");
+        textArea.id = "ai-chat-input";
+        textArea.placeholder = "Ask AI about this code...";
+        textArea.style.width = "100%";
+        textArea.style.height = "60px";
+        textArea.style.resize = "none";
+        textArea.style.padding = "8px";
+        textArea.style.border = "1px solid #ccc";
+        textArea.style.borderRadius = "4px";
+        textArea.style.fontSize = "14px";
+        textArea.style.boxSizing = "border-box";
+
+        // Create the send button
+        const sendButton = document.createElement("button");
+        sendButton.id = "ai-chat-send";
+        sendButton.innerText = "Send";
+        sendButton.style.marginTop = "8px";
+        sendButton.style.padding = "8px 12px";
+        sendButton.style.backgroundColor = "#007bff";
+        sendButton.style.color = "#fff";
+        sendButton.style.border = "none";
+        sendButton.style.borderRadius = "4px";
+        sendButton.style.cursor = "pointer";
+        sendButton.style.fontSize = "14px";
+
+        // Create the output container for AI responses
+        const outputDiv = document.createElement("div");
+        outputDiv.id = "ai-chat-output";
+        outputDiv.style.marginTop = "10px";
+        outputDiv.style.maxHeight = "150px";
+        outputDiv.style.overflowY = "auto";
+        outputDiv.style.fontSize = "14px";
+        outputDiv.style.color = "#333";
+
+        // Assemble the chat container
+        chatContainer.appendChild(header);
+        chatContainer.appendChild(textArea);
+        chatContainer.appendChild(sendButton);
+        chatContainer.appendChild(outputDiv);
+
+        // Append the chat container to the document body
+        document.body.appendChild(chatContainer);
+
+        // 3. Attach event handler to the "Send" button
+        chatContainer
+          .querySelector("#ai-chat-send")
+          .addEventListener("click", async () => {
+            const userQuery = chatContainer
+              .querySelector("#ai-chat-input")
+              .value.trim();
+            if (!userQuery) return;
+            console.log(selectedCode);
+
+            // Combine selected code and the user's question for context.
+            // Adjust the prompt as needed for your AI.
+            const prompt = `
+Selected Code:
+${selectedCode}
+
+User's Question:
+${userQuery}
+      `;
+
+            // Call your AI API (this is a placeholder function you should implement)
+            const aiResponse = await chatWithAI(prompt);
+
+            // Display the AI response in the chat output div
+            chatContainer.querySelector("#ai-chat-output").innerHTML = `
+              ${await renderMarkdown(aiResponse)}`;
+          });
+      },
+    });
   });
 
   let superKey = "⌘";
@@ -955,7 +1210,7 @@ const DEFAULT_STDIN =
 const DEFAULT_COMPILER_OPTIONS = "";
 const DEFAULT_CMD_ARGUMENTS = "";
 const DEFAULT_LANGUAGE_ID = 105; // C++ (GCC 14.1.0) (https://ce.judge0.com/languages/105)
-
+sessionStorage.setItem("languageid", DEFAULT_LANGUAGE_ID);
 function getEditorLanguageMode(languageName) {
   const DEFAULT_EDITOR_LANGUAGE_MODE = "plaintext";
   const LANGUAGE_NAME_TO_LANGUAGE_EDITOR_MODE = {
